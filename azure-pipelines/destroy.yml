@@ -1,11 +1,11 @@
 pool:
-  name: 'Default'
+  vmImage: Ubuntu-latest
 
 variables:
   terraformVersion: '1.5.5'  # Specify the Terraform version
-  azureServiceConnection: 'azurerm'  # Azure service connection name
-  backendResourceGroup: 'skink-rg'
-  backendStorageAccount: 'skinktfstate'  # Remote backend storage account
+  azureServiceConnection: 'wf-terraform'  # Azure service connection name
+  backendResourceGroup: 'rg-tfstate-dev-001'
+  backendStorageAccount: 'sttfstatedev001gustavo'  # Remote backend storage account
   backendContainer: 'tfstate'  # Remote backend storage container
   backendKey: 'terraform.tfstate'  # State file name in remote backend
 
