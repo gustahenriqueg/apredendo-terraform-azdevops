@@ -42,53 +42,55 @@ stages:
               workingDirectory: 'terraform'
 
           - task: TerraformTaskV4@4
-            displayName: 'Terraform Validate'
-            inputs:
-              provider: 'azurerm'
-              command: 'validate'
-              workingDirectory: 'terraform'
-
-          - task: TerraformTaskV4@4
             displayName: 'Terraform Plan'
             inputs:
               provider: 'azurerm'
               command: 'plan'
-              # O Pulo do Gato: Gerar o arquivo de saida (-out)
+              # Geramos o arquivo
               commandOptions: '-out=$(planFileName)'
               environmentServiceNameAzureRM: $(azureServiceConnection)
               workingDirectory: 'terraform'
 
-          # Publicamos APENAS o arquivo de plano e os arquivos de configuração (.tf)
-          # O diretório .terraform (plugins) será recriado no próximo stage
+          # CORREÇÃO AQUI: Copiamos o tfplan para um lugar limpo antes de publicar
+          # Isso evita pegar a pasta .terraform "suja"
+          - task: CopyFiles@2
+            displayName: 'Stage Plan File'
+            inputs:
+              SourceFolder: 'terraform'
+              Contents: '$(planFileName)' # Pega SÓ o arquivo do plano
+              TargetFolder: '$(Build.ArtifactStagingDirectory)'
+
           - task: PublishPipelineArtifact@1
             displayName: 'Publish Plan Artifact'
             inputs:
-              targetPath: 'terraform'
+              targetPath: '$(Build.ArtifactStagingDirectory)' # Publica o que copiamos acima
               artifactName: 'terraform-plan-artifact'
 
-  # Stage 2: CD - Apply (Manual Approval será configurado na GUI do Azure DevOps em Environments)
+  # Stage 2: CD - Apply
   - stage: CD_Apply
     displayName: 'CD - Apply Infrastructure'
     dependsOn: CI_Plan
-    # condition: succeeded() # Executa apenas se o Plan for sucesso (padrão)
+    condition: succeeded()
     jobs:
       - job: TerraformApply
         displayName: 'Terraform Apply'
         steps:
-          # 1. Baixa o artefato (o plano gerado anteriormente)
+          # O Checkout acontece automaticamente, trazendo os .tf limpos
+          
+          # 1. Baixa o artefato (apenas o arquivo tfplan)
           - task: DownloadPipelineArtifact@2
             displayName: 'Download Plan Artifact'
             inputs:
               artifactName: 'terraform-plan-artifact'
-              downloadPath: '$(System.DefaultWorkingDirectory)/terraform'
+              # Baixa para a pasta onde o código fonte já está (pelo checkout)
+              downloadPath: '$(System.DefaultWorkingDirectory)/terraform' 
 
-          # 2. Instala o Terraform NOVAMENTE (Novo Agente = Nova Instalação)
           - task: TerraformInstaller@0
             displayName: 'Install Terraform'
             inputs:
               terraformVersion: $(terraformVersion)
 
-          # 3. Init NOVAMENTE (para baixar plugins e configurar backend no novo agente)
+          # 2. Init vai baixar os providers com as permissões corretas, pois a pasta .terraform não existe aqui ainda
           - task: TerraformTaskV4@4
             displayName: 'Terraform Init'
             inputs:
@@ -101,13 +103,12 @@ stages:
               backendAzureRmKey: $(backendKey)
               workingDirectory: 'terraform'
 
-          # 4. Apply usando o ARQUIVO gerado no stage anterior
+          # 3. Aplica usando o arquivo que veio do artefato
           - task: TerraformTaskV4@4
             displayName: 'Terraform Apply'
             inputs:
               provider: 'azurerm'
               command: 'apply'
-              # Aqui está a mágica: Aplicamos o arquivo, não a configuração solta
               commandOptions: '$(planFileName)' 
               environmentServiceNameAzureRM: $(azureServiceConnection)
               workingDirectory: 'terraform'
