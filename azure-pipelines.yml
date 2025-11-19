@@ -1,0 +1,113 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  terraformVersion: '1.5.5'
+  azureServiceConnection: 'wf-terraform'
+  backendResourceGroup: 'rg-tfstate-dev-001'
+  backendStorageAccount: 'sttfstatedev001gustavo'
+  backendContainer: 'tfstate'
+  backendKey: 'terraform.tfstate'
+  # Definimos o nome do arquivo de plano como variável para facilitar
+  planFileName: 'tfplan'
+
+stages:
+  # Stage 1: CI - Validate & Plan
+  - stage: CI_Plan
+    displayName: 'CI - Plan Infrastructure'
+    jobs:
+      - job: TerraformPlan
+        displayName: 'Terraform Init, Validate & Plan'
+        steps:
+          - task: TerraformInstaller@0
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: $(terraformVersion)
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              backendServiceArm: $(azureServiceConnection)
+              backendAzureRmResourceGroupName: $(backendResourceGroup)
+              backendAzureRmStorageAccountName: $(backendStorageAccount)
+              backendAzureRmContainerName: $(backendContainer)
+              backendAzureRmKey: $(backendKey)
+              workingDirectory: 'terraform'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Validate'
+            inputs:
+              provider: 'azurerm'
+              command: 'validate'
+              workingDirectory: 'terraform'
+
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Plan'
+            inputs:
+              provider: 'azurerm'
+              command: 'plan'
+              # O Pulo do Gato: Gerar o arquivo de saida (-out)
+              commandOptions: '-out=$(planFileName)'
+              environmentServiceNameAzureRM: $(azureServiceConnection)
+              workingDirectory: 'terraform'
+
+          # Publicamos APENAS o arquivo de plano e os arquivos de configuração (.tf)
+          # O diretório .terraform (plugins) será recriado no próximo stage
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Plan Artifact'
+            inputs:
+              targetPath: 'terraform'
+              artifactName: 'terraform-plan-artifact'
+
+  # Stage 2: CD - Apply (Manual Approval será configurado na GUI do Azure DevOps em Environments)
+  - stage: CD_Apply
+    displayName: 'CD - Apply Infrastructure'
+    dependsOn: CI_Plan
+    # condition: succeeded() # Executa apenas se o Plan for sucesso (padrão)
+    jobs:
+      - job: TerraformApply
+        displayName: 'Terraform Apply'
+        steps:
+          # 1. Baixa o artefato (o plano gerado anteriormente)
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download Plan Artifact'
+            inputs:
+              artifactName: 'terraform-plan-artifact'
+              downloadPath: '$(System.DefaultWorkingDirectory)/terraform'
+
+          # 2. Instala o Terraform NOVAMENTE (Novo Agente = Nova Instalação)
+          - task: TerraformInstaller@0
+            displayName: 'Install Terraform'
+            inputs:
+              terraformVersion: $(terraformVersion)
+
+          # 3. Init NOVAMENTE (para baixar plugins e configurar backend no novo agente)
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Init'
+            inputs:
+              provider: 'azurerm'
+              command: 'init'
+              backendServiceArm: $(azureServiceConnection)
+              backendAzureRmResourceGroupName: $(backendResourceGroup)
+              backendAzureRmStorageAccountName: $(backendStorageAccount)
+              backendAzureRmContainerName: $(backendContainer)
+              backendAzureRmKey: $(backendKey)
+              workingDirectory: 'terraform'
+
+          # 4. Apply usando o ARQUIVO gerado no stage anterior
+          - task: TerraformTaskV4@4
+            displayName: 'Terraform Apply'
+            inputs:
+              provider: 'azurerm'
+              command: 'apply'
+              # Aqui está a mágica: Aplicamos o arquivo, não a configuração solta
+              commandOptions: '$(planFileName)' 
+              environmentServiceNameAzureRM: $(azureServiceConnection)
+              workingDirectory: 'terraform'
